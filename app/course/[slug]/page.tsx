@@ -180,6 +180,32 @@ export default function CoursePage() {
     return () => unsub();
   }, []);
 
+  // ── LOAD SAVED PROGRESS from Firestore ─────────────────────────────────────
+  useEffect(() => {
+    if (!user || !slug) return;
+    const loadSavedProgress = async () => {
+      try {
+        const progressRef = doc(db, "users", user.uid, "progress", slug);
+        const snap = await getDoc(progressRef);
+        if (snap.exists()) {
+          const savedProgress = snap.data().progress || 0;
+          setProgress(savedProgress);
+          // Also seek video to saved position if player is ready
+          if (playerRef.current && playerRef.current.seekTo) {
+            const duration = playerRef.current.getDuration();
+            if (duration) {
+              const seekTime = (savedProgress / 100) * duration;
+              playerRef.current.seekTo(seekTime, true);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("Failed to load saved progress:", e);
+      }
+    };
+    loadSavedProgress();
+  }, [user, slug]);
+
   // ── LOAD EXISTING BADGES on auth ───────────────────────────────────────────
   useEffect(() => {
     if (!user) return;
