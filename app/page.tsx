@@ -20,6 +20,8 @@ import { loginUser, resetPassword } from "@/lib/auth";
 export default function Home() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const router = useRouter();
 
   const techLogos = [
@@ -30,27 +32,31 @@ export default function Home() {
   ];
 
   const handleLogin = async () => {
+    setError("");
+    setLoading(true);
+
     try {
       await loginUser(email, password);
       router.push("/dashboard");
     } catch (err: any) {
-      console.log(err.code);
-      alert(err.message);
+      setError(err.message || "Login failed. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleForgotPassword = async () => {
     if (!email) {
-      alert("Enter your email first");
+      setError("Enter your email first");
       return;
     }
 
     try {
       await resetPassword(email);
+      setError("");
       alert("Password reset email sent!");
     } catch (err: any) {
-      console.log(err);
-      alert(err.message);
+      setError(err.message);
     }
   };
 
@@ -79,9 +85,16 @@ export default function Home() {
                 Login
               </h2>
 
+              {error && (
+                <div className="mb-4 p-3 bg-red-500/20 border border-red-500/50 rounded-lg text-red-200 text-sm">
+                  {error}
+                </div>
+              )}
+
               <input
                 type="email"
                 placeholder="Email"
+                value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full mb-4 px-4 py-3 rounded-lg bg-transparent border border-white/10 text-white placeholder-gray-400 focus:outline-none"
               />
@@ -89,6 +102,7 @@ export default function Home() {
               <input
                 type="password"
                 placeholder="Password"
+                value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="w-full mb-3 px-4 py-3 rounded-lg bg-transparent border border-white/10 text-white placeholder-gray-400 focus:outline-none"
               />
@@ -104,13 +118,14 @@ export default function Home() {
 
               <button
                 onClick={handleLogin}
-                className="w-full bg-white text-black py-3 rounded-lg font-semibold hover:opacity-90"
+                disabled={loading}
+                className="w-full bg-white text-black py-3 rounded-lg font-semibold hover:opacity-90 disabled:opacity-50"
               >
-                Login
+                {loading ? "Logging in..." : "Login"}
               </button>
 
               <p className="text-center text-gray-400 mt-6 text-sm">
-                Don’t have an account?{" "}
+                Don't have an account?{" "}
                 <span
                   onClick={() => router.push("/register")}
                   className="text-white cursor-pointer hover:underline"

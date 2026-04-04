@@ -442,8 +442,22 @@ export default function FloatingLines({
     }
 
     let raf = 0;
+    let isVisible = true;
+
+    // Only render when visible
+    const observer = new IntersectionObserver((entries) => {
+      isVisible = entries[0]?.isIntersecting ?? true;
+    }, { threshold: 0 });
+    observer.observe(container);
+
     const renderLoop = () => {
       if (!active) return;
+
+      // Skip rendering when not visible
+      if (!isVisible) {
+        raf = requestAnimationFrame(renderLoop);
+        return;
+      }
 
       uniforms.iTime.value = clock.getElapsedTime();
 
@@ -471,6 +485,7 @@ export default function FloatingLines({
       cancelAnimationFrame(raf);
 
       if (ro) ro.disconnect();
+      observer.disconnect();
 
       if (interactive) {
         renderer.domElement.removeEventListener('pointermove', handlePointerMove);
