@@ -147,6 +147,7 @@ export default function CoursePage() {
 
   const playerRef = useRef<any>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const savedProgressRef = useRef<number>(0); // Store saved progress to apply when player ready
   const [progress, setProgress] = useState(0);
   const [user, setUser] = useState<any>(null);
 
@@ -189,15 +190,9 @@ export default function CoursePage() {
         const snap = await getDoc(progressRef);
         if (snap.exists()) {
           const savedProgress = snap.data().progress || 0;
+          savedProgressRef.current = savedProgress;
           setProgress(savedProgress);
-          // Also seek video to saved position if player is ready
-          if (playerRef.current && playerRef.current.seekTo) {
-            const duration = playerRef.current.getDuration();
-            if (duration) {
-              const seekTime = (savedProgress / 100) * duration;
-              playerRef.current.seekTo(seekTime, true);
-            }
-          }
+          console.log("Loaded saved progress:", savedProgress + "%");
         }
       } catch (e) {
         console.error("Failed to load saved progress:", e);
@@ -234,14 +229,26 @@ export default function CoursePage() {
   // ── VIDEO PROGRESS ────────────────────────────────────────────────────────
   const handleReady = (event: any) => {
     playerRef.current = event.target;
+    const player = event.target;
+
+    // Apply saved progress if exists (seek to saved timestamp)
+    const savedProgress = savedProgressRef.current;
+    if (savedProgress > 0) {
+      const duration = player.getDuration();
+      if (duration) {
+        const seekTime = (savedProgress / 100) * duration;
+        player.seekTo(seekTime, true);
+        console.log("Seeked to saved position:", seekTime + "s (" + savedProgress + "%)");
+      }
+    }
 
     if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
 
     progressIntervalRef.current = setInterval(() => {
-      const player = playerRef.current;
-      if (!player) return;
-      const duration = player.getDuration();
-      const current = player.getCurrentTime();
+      const p = playerRef.current;
+      if (!p) return;
+      const duration = p.getDuration();
+      const current = p.getCurrentTime();
       if (!duration) return;
       const percent = Math.floor((current / duration) * 100);
       setProgress(percent);
