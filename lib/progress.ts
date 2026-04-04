@@ -6,6 +6,11 @@ export const updateProgress = async (course: string, progress: number) => {
 
   if (!user) return;
 
+  // Cache to localStorage for instant access on page reload
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(`course-progress-${course}`, String(progress));
+  }
+
   const ref = doc(db, "users", user.uid, "progress", course);
 
   await setDoc(ref, { progress }, { merge: true });

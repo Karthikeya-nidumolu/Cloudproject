@@ -148,7 +148,18 @@ export default function CoursePage() {
   const playerRef = useRef<any>(null);
   const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const savedProgressRef = useRef<number>(0); // Store saved progress to apply when player ready
-  const [progress, setProgress] = useState(0);
+  const initialSeekDoneRef = useRef<boolean>(false); // Track if initial seek completed
+
+  // Get saved progress from localStorage for instant access on reload
+  const getCachedProgress = () => {
+    if (typeof window === 'undefined') return 0;
+    const cached = localStorage.getItem(`course-progress-${slug}`);
+    return cached ? parseInt(cached, 10) : 0;
+  };
+
+  const cachedProgress = getCachedProgress();
+  savedProgressRef.current = cachedProgress; // Set ref immediately
+  const [progress, setProgress] = useState(cachedProgress);
   const [user, setUser] = useState<any>(null);
 
   // tab state
@@ -192,6 +203,8 @@ export default function CoursePage() {
           const savedProgress = snap.data().progress || 0;
           savedProgressRef.current = savedProgress;
           setProgress(savedProgress);
+          // Cache to localStorage for instant access on reload
+          localStorage.setItem(`course-progress-${slug}`, String(savedProgress));
           console.log("Loaded saved progress:", savedProgress + "%");
         }
       } catch (e) {
@@ -242,9 +255,18 @@ export default function CoursePage() {
       }
     }
 
+    // Mark initial seek as done after a short delay to let video settle
+    setTimeout(() => {
+      initialSeekDoneRef.current = true;
+      console.log("Initial seek complete - progress tracking enabled");
+    }, 1000);
+
     if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
 
     progressIntervalRef.current = setInterval(() => {
+      // Don't update until initial seek is complete
+      if (!initialSeekDoneRef.current) return;
+
       const p = playerRef.current;
       if (!p) return;
       const duration = p.getDuration();
@@ -568,6 +590,7 @@ Rules:
                   autoplay: 0,
                   modestbranding: 1,
                   rel: 0,
+                  start: savedProgressRef.current > 0 ? Math.floor((savedProgressRef.current / 100) * (playerRef.current?.getDuration?.() || 0)) : 0,
                 },
               }}
             />
