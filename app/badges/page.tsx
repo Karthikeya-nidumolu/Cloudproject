@@ -4,12 +4,11 @@ export const dynamic = 'force-dynamic';
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { onAuthStateChanged } from "firebase/auth";
 import { doc, onSnapshot, collection, getDoc, getDocs } from "firebase/firestore";
 
 import FloatingLines from "@/components/FloatingLines";
-import { auth, db } from "@/lib/firebase";
-import { logoutUser } from "@/lib/auth";
+import { db } from "@/lib/firebase";
+import { logoutUser, getCurrentUser } from "@/lib/auth";
 import {
   ALL_BADGES,
   Badge,
@@ -26,37 +25,38 @@ export default function BadgesPage() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "earned" | "locked">("all");
 
+  // ── AUTH CHECK using localStorage (same as dashboard) ───────────────────────────
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (firebaseUser) => {
-      if (!firebaseUser) {
-        router.push("/");
-      } else {
-        setUser(firebaseUser);
-        setLoading(false);
-        // Load existing badges from Firestore
-        const loadExistingBadges = async () => {
-          try {
-            const badgeRef = doc(db, "users", firebaseUser.uid, "badges", "earned");
-            const snap = await getDoc(badgeRef);
-            if (snap.exists()) {
-              const data = snap.data();
-              let existingIds: string[] = [];
-              if (data.badges && typeof data.badges === "object") {
-                existingIds = Object.keys(data.badges);
-              } else if (data.ids && Array.isArray(data.ids)) {
-                existingIds = data.ids;
-              }
-              console.log("Badges page - loaded existing:", existingIds);
-              setEarnedIds(existingIds);
-            }
-          } catch (e) {
-            console.error("Failed to load existing badges:", e);
+    const currentUser = getCurrentUser();
+    if (!currentUser) {
+      router.push("/");
+      return;
+    }
+
+    setUser(currentUser);
+    setLoading(false);
+
+    // Load existing badges from Firestore
+    const loadExistingBadges = async () => {
+      try {
+        const badgeRef = doc(db, "users", currentUser.uid, "badges", "earned");
+        const snap = await getDoc(badgeRef);
+        if (snap.exists()) {
+          const data = snap.data();
+          let existingIds: string[] = [];
+          if (data.badges && typeof data.badges === "object") {
+            existingIds = Object.keys(data.badges);
+          } else if (data.ids && Array.isArray(data.ids)) {
+            existingIds = data.ids;
           }
-        };
-        loadExistingBadges();
+          console.log("Badges page - loaded existing:", existingIds);
+          setEarnedIds(existingIds);
+        }
+      } catch (e) {
+        console.error("Failed to load existing badges:", e);
       }
-    });
-    return () => unsub();
+    };
+    loadExistingBadges();
   }, [router]);
 
   // Load progress - merge with localStorage cache for instant display
