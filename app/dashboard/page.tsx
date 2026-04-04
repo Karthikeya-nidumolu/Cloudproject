@@ -21,9 +21,9 @@ function todayStr() {
 }
 
 function startOfYear() {
-  const d = new Date();
-  d.setMonth(0, 1);
-  return d;
+  // Return January 1st of current year at midnight UTC
+  const now = new Date();
+  return new Date(Date.UTC(now.getFullYear(), 0, 1));
 }
 
 interface BadgeCardProps {
@@ -391,13 +391,15 @@ export default function Dashboard() {
           transform: translateY(-4px) scale(1.03);
           box-shadow: 0 0 25px var(--badge-color-glow, rgba(255,255,255,0.1));
         }
+        .react-calendar-heatmap { width: 100%; }
         .react-calendar-heatmap .color-empty { fill: #1a1a2e; }
-        .react-calendar-heatmap .color-scale-1 { fill: #0e4f4f; }
-        .react-calendar-heatmap .color-scale-2 { fill: #0c7c7c; }
-        .react-calendar-heatmap .color-scale-3 { fill: #06b6b6; }
-        .react-calendar-heatmap .color-scale-4 { fill: #22d3ee; }
+        .react-calendar-heatmap .color-scale-1 { fill: #164e63; }
+        .react-calendar-heatmap .color-scale-2 { fill: #0891b2; }
+        .react-calendar-heatmap .color-scale-3 { fill: #22d3ee; }
+        .react-calendar-heatmap .color-scale-4 { fill: #67e8f9; }
         .react-calendar-heatmap text { fill: #6b7280; font-size: 10px; }
-        .react-calendar-heatmap rect:hover { opacity: 0.8; }
+        .react-calendar-heatmap rect { rx: 2px; ry: 2px; }
+        .react-calendar-heatmap rect:hover { opacity: 0.8; cursor: pointer; }
       `}</style>
 
       <div className="absolute inset-0 z-0">
@@ -660,7 +662,15 @@ export default function Dashboard() {
 
           {activeSection === "analytics" && (
             <>
-              <h2 className="text-3xl font-bold mb-2">Progress Analytics</h2>
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-3xl font-bold">Progress Analytics</h2>
+                <button
+                  onClick={() => user && loadAnalytics(user.uid)}
+                  className="text-sm text-cyan-400 hover:text-cyan-300 transition flex items-center gap-1"
+                >
+                  ↻ Refresh
+                </button>
+              </div>
               <p className="text-gray-400 mb-8">Your learning activity across all courses</p>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
@@ -684,24 +694,28 @@ export default function Dashboard() {
               <div className="bg-black/50 border border-white/10 rounded-xl p-6 mb-8 backdrop-blur">
                 <h3 className="text-lg font-semibold mb-4">Activity Heatmap</h3>
                 <p className="text-xs text-gray-500 mb-4">
-                  Each square = a day. Darker = more activity.
+                  Each square = a day. Brighter = more activity.
                 </p>
-                <CalendarHeatmap
+                <div className="overflow-x-auto">
+                  <div className="min-w-[700px]">
+                    <CalendarHeatmap
                   startDate={startOfYear()}
                   endDate={new Date()}
                   values={heatmapData}
                   classForValue={(value) => {
                     if (!value || value.count === 0) return "color-empty";
-                    if (value.count === 1) return "color-scale-1";
-                    if (value.count === 2) return "color-scale-2";
-                    if (value.count === 3) return "color-scale-3";
-                    return "color-scale-4";
+                    if (value.count >= 4) return "color-scale-4";
+                    if (value.count >= 3) return "color-scale-3";
+                    if (value.count >= 2) return "color-scale-2";
+                    return "color-scale-1";
                   }}
-                  titleForValue={(value) =>
-                    value ? `${value.date}: ${value.count} activities` : "No activity"
-                  }
+                  tooltipDataAttrs={(value) => ({
+                    'data-tip': value ? `${value.date}: ${value.count} activities` : "No activity",
+                  })}
                   showWeekdayLabels
                 />
+                  </div>
+                </div>
               </div>
 
               <div className="bg-black/50 border border-white/10 rounded-xl p-6 backdrop-blur">
