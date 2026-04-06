@@ -8,7 +8,7 @@ import { useRouter } from "next/navigation";
 import FloatingLines from "@/components/FloatingLines";
 import BadgeToast from "@/components/BadgeToast";
 
-import { db } from "@/lib/firebase";
+import { db, isFirebaseReady, restoreFirebaseAuth } from "@/lib/firebase";
 import { logoutUser, getCurrentUser } from "@/lib/auth";
 import { doc, onSnapshot, collection, setDoc, serverTimestamp, getDocs, getDoc } from "firebase/firestore";
 
@@ -63,6 +63,21 @@ function BadgeCard({ badge, earned, onClick, delay = 0 }: BadgeCardProps) {
   );
 }
 
+const COURSES = [
+  { id: "aws", name: "AWS", icon: "☁️", color: "#22d3ee" },
+  { id: "devops", name: "DevOps", icon: "⚙️", color: "#a78bfa" },
+  { id: "ai", name: "AI", icon: "🤖", color: "#34d399" },
+  { id: "docker", name: "Docker", icon: "🐳", color: "#60a5fa" },
+  { id: "kubernetes", name: "Kubernetes", icon: "☸️", color: "#a855f7" },
+  { id: "python", name: "Python", icon: "🐍", color: "#fbbf24" },
+  { id: "javascript", name: "JavaScript", icon: "📜", color: "#fbbf24" },
+  { id: "react", name: "React", icon: "⚛️", color: "#38bdf8" },
+  { id: "typescript", name: "TypeScript", icon: "📘", color: "#3b82f6" },
+  { id: "git", name: "Git", icon: "🌲", color: "#f87171" },
+  { id: "sql", name: "SQL", icon: "🗃️", color: "#818cf8" },
+  { id: "linux", name: "Linux", icon: "🐧", color: "#fb923c" },
+];
+
 export default function Dashboard() {
   const router = useRouter();
 
@@ -109,49 +124,53 @@ export default function Dashboard() {
   const [activeDays, setActiveDays] = useState(0);
   const [totalProgress, setTotalProgress] = useState(0);
 
-  const courses = [
-    { id: "aws", name: "AWS", icon: "☁️", color: "#22d3ee" },
-    { id: "devops", name: "DevOps", icon: "⚙️", color: "#a78bfa" },
-    { id: "ai", name: "AI", icon: "🤖", color: "#34d399" },
-    { id: "docker", name: "Docker", icon: "🐳", color: "#60a5fa" },
-    { id: "kubernetes", name: "Kubernetes", icon: "☸️", color: "#a855f7" },
-    { id: "python", name: "Python", icon: "🐍", color: "#fbbf24" },
-    { id: "javascript", name: "JavaScript", icon: "📜", color: "#fbbf24" },
-    { id: "react", name: "React", icon: "⚛️", color: "#38bdf8" },
-    { id: "typescript", name: "TypeScript", icon: "📘", color: "#3b82f6" },
-    { id: "git", name: "Git", icon: "🌲", color: "#f87171" },
-    { id: "sql", name: "SQL", icon: "🗃️", color: "#818cf8" },
-    { id: "linux", name: "Linux", icon: "🐧", color: "#fb923c" },
-  ];
+  const courses = COURSES;
 
-  const loadAnalytics = useCallback(async (uid: string) => {
-    try {
-      const actSnap = await getDocs(collection(db, "users", uid, "activity"));
-      const countMap: Record<string, number> = {};
-      actSnap.docs.forEach((d) => {
-        countMap[d.id] = d.data().count ?? 1;
-      });
-      const heatValues = Object.entries(countMap).map(([date, count]) => ({ date, count }));
-      setHeatmapData(heatValues);
-      setActiveDays(heatValues.length);
+  // Real-time analytics subscriptions
+  const analyticsUnsubsRef = useRef<(() => void)[]>([]);
 
-      const quizSnap = await getDocs(collection(db, "users", uid, "quizResults"));
-      const quizDocs = quizSnap.docs.map((d) => d.data());
-      setTotalQuizzes(quizDocs.length);
-      if (quizDocs.length > 0) {
-        const validDocs = quizDocs.filter(
-          (q) => typeof q.score === "number" && typeof q.total === "number" && q.total > 0
-        );
-        if (validDocs.length > 0) {
-          const avg =
-            validDocs.reduce((acc, q) => acc + (q.score / q.total) * 100, 0) /
-            validDocs.length;
-          setAvgQuizScore(Math.round(avg));
+  const subscribeAnalytics = useCallback((uid: string) => {
+    // Cleanup previous subscriptions
+    analyticsUnsubsRef.current.forEach(unsub => unsub());
+    analyticsUnsubsRef.current = [];
+
+    // Real-time activity listener
+    const actUnsub = onSnapshot(
+      collection(db, "users", uid, "activity"),
+      (snapshot) => {
+        const countMap: Record<string, number> = {};
+        snapshot.docs.forEach((d) => {
+          countMap[d.id] = d.data().count ?? 1;
+        });
+        const heatValues = Object.entries(countMap).map(([date, count]) => ({ date, count }));
+        setHeatmapData(heatValues);
+        setActiveDays(heatValues.length);
+      },
+      (err) => console.warn("Activity listener error:", err)
+    );
+    analyticsUnsubsRef.current.push(actUnsub);
+
+    // Real-time quiz results listener
+    const quizUnsub = onSnapshot(
+      collection(db, "users", uid, "quizResults"),
+      (snapshot) => {
+        const quizDocs = snapshot.docs.map((d) => d.data());
+        setTotalQuizzes(quizDocs.length);
+        if (quizDocs.length > 0) {
+          const validDocs = quizDocs.filter(
+            (q) => typeof q.score === "number" && typeof q.total === "number" && q.total > 0
+          );
+          if (validDocs.length > 0) {
+            const avg =
+              validDocs.reduce((acc, q) => acc + (q.score / q.total) * 100, 0) /
+              validDocs.length;
+            setAvgQuizScore(Math.round(avg));
+          }
         }
-      }
-    } catch (e) {
-      console.error("Failed to load analytics:", e);
-    }
+      },
+      (err) => console.warn("Quiz listener error:", err)
+    );
+    analyticsUnsubsRef.current.push(quizUnsub);
   }, []);
 
   // ── INITIAL AUTH AND BADGE LOADING ─────────────────────────────────────────────
@@ -164,6 +183,15 @@ export default function Dashboard() {
 
     setUser(currentUser);
     setLoading(false);
+
+    // Restore Firebase SDK auth for Firestore security rules
+    restoreFirebaseAuth().catch(() => {});
+
+    // Guard: Skip Firestore operations if Firebase is not initialized
+    if (!isFirebaseReady()) {
+      console.warn("Firebase not initialized, skipping Firestore operations");
+      return;
+    }
 
     const userRef = doc(db, "users", currentUser.uid);
     const unsubDb = onSnapshot(userRef, (snap) => {
@@ -198,6 +226,7 @@ export default function Dashboard() {
   // ── LOAD SAVED PROGRESS from Firestore with merge to preserve local cache ─────
   useEffect(() => {
     if (!user) return;
+    if (!isFirebaseReady()) return;
     const ref = collection(db, "users", user.uid, "progress");
     const unsub = onSnapshot(ref, (snapshot) => {
       const data: Record<string, { progress: number }> = {};
@@ -279,20 +308,21 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!user) return;
-    loadAnalytics(user.uid);
-  }, [user, loadAnalytics]);
+    if (!isFirebaseReady()) return;
+    subscribeAnalytics(user.uid);
+    return () => {
+      analyticsUnsubsRef.current.forEach(unsub => unsub());
+      analyticsUnsubsRef.current = [];
+    };
+  }, [user, subscribeAnalytics]);
+
+  // No need for separate analytics reload on section change - it's real-time now
 
   useEffect(() => {
-    if (activeSection === "analytics" && user) {
-      loadAnalytics(user.uid);
-    }
-  }, [activeSection, user, loadAnalytics]);
-
-  useEffect(() => {
-    const vals = courses.map((c) => progressData[c.id]?.progress || 0);
-    const avg = Math.round(vals.reduce((a, b) => a + b, 0) / courses.length);
+    const vals = COURSES.map((c) => progressData[c.id]?.progress || 0);
+    const avg = Math.round(vals.reduce((a, b) => a + b, 0) / COURSES.length);
     setTotalProgress(avg);
-  }, [progressData, courses]);
+  }, [progressData]);
 
   useEffect(() => {
     if (userData) {
@@ -325,6 +355,11 @@ export default function Dashboard() {
 
   const handleSaveProfile = async () => {
     if (!user) return;
+    if (!isFirebaseReady()) {
+      setProfileMessage("❌ Firebase not initialized.");
+      setIsSavingProfile(false);
+      return;
+    }
     setIsSavingProfile(true);
     setProfileMessage("");
 
@@ -461,6 +496,13 @@ export default function Dashboard() {
               className="text-left px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition"
             >
               💼 Interview Prep
+            </button>
+
+            <button
+              onClick={() => router.push("/community")}
+              className="text-left px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition"
+            >
+              👥 Community
             </button>
 
             <button
@@ -672,7 +714,7 @@ export default function Dashboard() {
               <div className="flex items-center justify-between mb-2">
                 <h2 className="text-3xl font-bold">Progress Analytics</h2>
                 <button
-                  onClick={() => user && loadAnalytics(user.uid)}
+                  onClick={() => subscribeAnalytics(user.uid)}
                   className="text-sm text-cyan-400 hover:text-cyan-300 transition flex items-center gap-1"
                 >
                   ↻ Refresh

@@ -12,8 +12,8 @@ import BadgeToast from "@/components/BadgeToast";
 import { updateProgress } from "@/lib/progress";
 import { askGemini } from "@/lib/gemini";
 import { ALL_BADGES, Badge } from "@/lib/badges";
-import { auth } from "@/lib/firebase";
-import { db } from "@/lib/firebase";
+import { db, isFirebaseReady, restoreFirebaseAuth } from "@/lib/firebase";
+import { getCurrentUser } from "@/lib/auth";
 import {
   collection,
   addDoc,
@@ -22,8 +22,8 @@ import {
   setDoc,
   doc,
   getDoc,
+  onSnapshot,
 } from "firebase/firestore";
-import { onAuthStateChanged } from "firebase/auth";
 import { computeEarnedBadgeIds, syncBadgesToFirestore } from "@/lib/badges";
 
 // ── course data ───────────────────────────────────────────────────────────────
@@ -108,17 +108,17 @@ function todayStr() {
 }
 
 async function logActivity(uid: string) {
+  if (!isFirebaseReady() || !uid) return;
   const today = todayStr();
   const ref = doc(db, "users", uid, "activity", today);
   try {
-    const snap = await getDocs(collection(db, "users", uid, "activity"));
-    const existing = snap.docs.find((d) => d.id === today);
-    const currentCount = existing?.data().count ?? 0;
+    const existing = await getDoc(ref);
+    const currentCount = existing.exists() ? (existing.data().count ?? 0) : 0;
     await setDoc(ref, { count: currentCount + 1, lastSeen: serverTimestamp() }, { merge: true });
   } catch (e: any) {
-    // Silently ignore offline errors - Firebase will sync when back online
-    if (e?.code === "unavailable" || e?.message?.includes("offline")) {
-      console.log("Activity logging skipped - offline mode");
+    // Silently ignore offline/permission errors
+    if (e?.code === "unavailable" || e?.message?.includes("offline") || e?.code === "permission-denied") {
+      console.log("Activity logging skipped:", e?.code);
     }
   }
 }
@@ -178,8 +178,14 @@ export default function CoursePage() {
 
   // ── AUTH ──────────────────────────────────────────────────────────────────
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => setUser(u));
-    return () => unsub();
+    // Use localStorage user (always available) instead of onAuthStateChanged
+    // which may not fire if Firebase SDK auth state hasn't been restored yet
+    const localUser = getCurrentUser();
+    if (localUser) {
+      setUser(localUser);
+    }
+    // Also try to restore Firebase SDK auth for Firestore security rules
+    restoreFirebaseAuth().catch(() => {});
   }, []);
 
   // ── LOAD CACHED PROGRESS from localStorage on mount (instant restore) ────────
@@ -197,6 +203,7 @@ export default function CoursePage() {
   // ── LOAD SAVED PROGRESS from Firestore ─────────────────────────────────────
   useEffect(() => {
     if (!user || !slug) return;
+    if (!isFirebaseReady()) return;
     const loadSavedProgress = async () => {
       try {
         const progressRef = doc(db, "users", user.uid, "progress", slug);
@@ -219,6 +226,7 @@ export default function CoursePage() {
   // ── LOAD EXISTING BADGES on auth ───────────────────────────────────────────
   useEffect(() => {
     if (!user) return;
+    if (!isFirebaseReady()) return;
     const loadExistingBadges = async () => {
       try {
         const badgeRef = doc(db, "users", user.uid, "badges", "earned");
@@ -277,7 +285,8 @@ export default function CoursePage() {
       const percent = Math.floor((current / duration) * 100);
       setProgress(percent);
       updateProgress(slug, percent);
-      if (user) logActivity(user.uid);
+      const uid = user?.uid || getCurrentUser()?.uid;
+      if (uid) logActivity(uid);
     }, 3000);
   };
 
@@ -381,14 +390,19 @@ Give a clear, helpful, concise answer (max 4 sentences). Use simple language.`;
       const modelMsg: ChatMessage = { role: "model", text: reply };
       setChatMessages((prev) => [...prev, modelMsg]);
 
-      if (user) {
-        await addDoc(collection(db, "users", user.uid, "chats"), {
-          course: slug,
-          userText: trimmed,
-          aiText: reply,
-          timestamp: serverTimestamp(),
-        });
-        logActivity(user.uid);
+      const uid = user?.uid || getCurrentUser()?.uid;
+      if (uid && isFirebaseReady()) {
+        try {
+          await addDoc(collection(db, "users", uid, "chats"), {
+            course: slug,
+            userText: trimmed,
+            aiText: reply,
+            timestamp: serverTimestamp(),
+          });
+          logActivity(uid);
+        } catch (e) {
+          console.warn("Chat save failed:", e);
+        }
       }
     } catch (err: any) {
       console.error("Chat error:", err);
@@ -489,17 +503,18 @@ Rules:
     setQuizScore(score);
     setQuizSubmitted(true);
 
-    if (user) {
+    const uid = user?.uid || getCurrentUser()?.uid;
+    if (uid && isFirebaseReady()) {
       try {
-        await addDoc(collection(db, "users", user.uid, "quizResults"), {
+        await addDoc(collection(db, "users", uid, "quizResults"), {
           course: slug,
           score,
           total: quizQuestions.length,
           date: serverTimestamp(),
         });
-        logActivity(user.uid);
+        logActivity(uid);
       } catch (e) {
-        console.error("Failed to save quiz result:", e);
+        console.warn("Failed to save quiz result:", e);
       }
     }
   };

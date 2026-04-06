@@ -1,6 +1,6 @@
 // lib/badges.ts
 import { doc, setDoc, getDoc } from "firebase/firestore";
-import { db } from "./firebase";
+import { db, isFirebaseReady } from "./firebase";
 
 export type Badge = {
   id: string;
@@ -606,6 +606,7 @@ export async function syncBadgesToFirestore(
   uid: string,
   earnedIds: string[]
 ): Promise<string[]> {
+  if (!isFirebaseReady()) return earnedIds;
   try {
     const ref = doc(db, "users", uid, "badges", "earned");
     const snap = await getDoc(ref);

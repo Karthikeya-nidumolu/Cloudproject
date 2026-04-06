@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { doc, onSnapshot, collection, getDoc, getDocs } from "firebase/firestore";
 
 import FloatingLines from "@/components/FloatingLines";
-import { db } from "@/lib/firebase";
+import { db, isFirebaseReady, restoreFirebaseAuth } from "@/lib/firebase";
 import { logoutUser, getCurrentUser } from "@/lib/auth";
 import {
   ALL_BADGES,
@@ -36,26 +36,36 @@ export default function BadgesPage() {
     setUser(currentUser);
     setLoading(false);
 
-    // Load existing badges from Firestore
-    const loadExistingBadges = async () => {
-      try {
-        const badgeRef = doc(db, "users", currentUser.uid, "badges", "earned");
-        const snap = await getDoc(badgeRef);
-        if (snap.exists()) {
-          const data = snap.data();
-          let existingIds: string[] = [];
-          if (data.badges && typeof data.badges === "object") {
-            existingIds = Object.keys(data.badges);
-          } else if (data.ids && Array.isArray(data.ids)) {
-            existingIds = data.ids;
-          }
-          setEarnedIds(existingIds);
+    // Restore Firebase SDK auth for Firestore security rules
+    restoreFirebaseAuth().catch(() => {});
+
+    // Guard: Skip Firestore operations if Firebase is not initialized
+    if (!isFirebaseReady()) {
+      console.warn("Firebase not initialized, skipping Firestore operations");
+      return;
+    }
+
+    // Real-time listener for badges document
+    const badgeRef = doc(db, "users", currentUser.uid, "badges", "earned");
+    const unsubBadges = onSnapshot(badgeRef, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        let existingIds: string[] = [];
+        if (data.badges && typeof data.badges === "object") {
+          // Sort by earnedAt (most recent first)
+          existingIds = Object.entries(data.badges)
+            .sort((a: any, b: any) => (b[1].earnedAt || 0) - (a[1].earnedAt || 0))
+            .map(([id]) => id);
+        } else if (data.ids && Array.isArray(data.ids)) {
+          existingIds = data.ids;
         }
-      } catch (e) {
-        console.error("Failed to load existing badges:", e);
+        setEarnedIds(existingIds);
       }
-    };
-    loadExistingBadges();
+    }, (err) => {
+      console.warn("Badge listener error:", err);
+    });
+
+    return () => unsubBadges();
   }, [router]);
 
   // Load progress - merge with localStorage cache for instant display
@@ -74,6 +84,7 @@ export default function BadgesPage() {
     setProgressData(cached);
 
     // Then subscribe to Firebase for real-time updates
+    if (!isFirebaseReady()) return;
     const ref = collection(db, "users", user.uid, "progress");
     const unsub = onSnapshot(ref, (snapshot) => {
       const data: Record<string, { progress: number }> = {};
@@ -217,6 +228,12 @@ export default function BadgesPage() {
               className="text-left px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition"
             >
               💼 Interview Prep
+            </button>
+            <button
+              onClick={() => router.push("/community")}
+              className="text-left px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition"
+            >
+              👥 Community
             </button>
           </nav>
 

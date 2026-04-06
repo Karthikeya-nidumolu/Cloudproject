@@ -29,9 +29,27 @@ export default function RegisterPage() {
     setError("");
 
     try {
-      await registerUser(email, password);
-      // Store name in localStorage for now (will be synced to DB later)
+      const result = await registerUser(email, password);
+      // Store name in localStorage for instant access
       localStorage.setItem("user_name", name);
+
+      // Save name to Firestore so dashboard shows it immediately
+      try {
+        const { doc, setDoc, serverTimestamp } = await import("firebase/firestore");
+        const { db, isFirebaseReady } = await import("@/lib/firebase");
+        if (isFirebaseReady() && result.uid) {
+          const userRef = doc(db, "users", result.uid);
+          await setDoc(userRef, {
+            name: name,
+            email: email,
+            createdAt: serverTimestamp(),
+          }, { merge: true });
+        }
+      } catch (firestoreErr) {
+        // Non-critical: name will be saved when they update profile
+        console.warn("Failed to save name to Firestore:", firestoreErr);
+      }
+
       router.push("/dashboard");
     } catch (err: any) {
       setError(err.message || "Registration failed");

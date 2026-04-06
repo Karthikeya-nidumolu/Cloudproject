@@ -1,17 +1,31 @@
 import { doc, setDoc } from "firebase/firestore";
-import { db, auth } from "./firebase";
+import { db, auth, isFirebaseReady } from "./firebase";
+import { getCurrentUser } from "./auth";
 
 export const updateProgress = async (course: string, progress: number) => {
-  const user = auth.currentUser;
+  // Get user from localStorage (always available) instead of auth.currentUser (may be null)
+  const localUser = getCurrentUser();
+  const uid = auth?.currentUser?.uid || localUser?.uid;
 
-  if (!user) return;
+  if (!uid) return;
 
   // Cache to localStorage for instant access on page reload
-  if (typeof window !== 'undefined') {
+  if (typeof window !== "undefined") {
     localStorage.setItem(`course-progress-${course}`, String(progress));
   }
 
-  const ref = doc(db, "users", user.uid, "progress", course);
+  // Skip Firestore if Firebase is not initialized
+  if (!isFirebaseReady()) return;
 
-  await setDoc(ref, { progress }, { merge: true });
+  try {
+    const ref = doc(db, "users", uid, "progress", course);
+    await setDoc(ref, { progress }, { merge: true });
+  } catch (e: any) {
+    // Silently ignore offline/permission errors
+    if (e?.code === "unavailable" || e?.message?.includes("offline")) {
+      console.log("Progress save skipped - offline mode");
+    } else {
+      console.warn("Progress save failed:", e?.message);
+    }
+  }
 };

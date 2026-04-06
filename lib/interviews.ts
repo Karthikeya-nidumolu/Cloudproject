@@ -1,6 +1,9 @@
 // Real interview questions from actual company interviews
 // Sources: LeetCode Discuss, Blind, Glassdoor, interview experiences
 
+import { collection, addDoc, query, where, getDocs, orderBy } from "firebase/firestore";
+import { db, isFirebaseReady } from "./firebase";
+
 export interface InterviewQuestion {
   id: string;
   question: string;
@@ -67,6 +70,14 @@ export const COMPANIES: Company[] = [
     color: "#555555",
     description: "Technical deep dives and product design",
     questionCount: 4,
+  },
+  {
+    id: "optum",
+    name: "Optum",
+    logo: "O",
+    color: "#FF6B35",
+    description: "Healthcare tech, data engineering, and system design",
+    questionCount: 5,
   },
 ];
 
@@ -1204,6 +1215,192 @@ function reverseListRecursive(head: ListNode | null): ListNode | null {
       topic: "Trees",
     },
   ],
+  optum: [
+    {
+      id: "opt1",
+      question: "Design a system to process real-time healthcare claims data",
+      answer: "Key components: Ingestion pipeline (Kafka/Kinesis), validation layer, fraud detection (ML), processing engine, storage (HIPAA-compliant). Consider batch vs streaming, data partitioning by provider/region, and audit logging for compliance.",
+      code: `class ClaimsProcessor {
+  private kafkaConsumer: KafkaConsumer;
+  private validator: ClaimValidator;
+  private fraudDetector: FraudDetectionService;
+
+  async processClaim(claim: Claim): Promise<ProcessingResult> {
+    // Step 1: Validate claim structure
+    const validation = this.validator.validate(claim);
+    if (!validation.isValid) {
+      return { status: 'REJECTED', errors: validation.errors };
+    }
+
+    // Step 2: Check for fraud patterns
+    const fraudScore = await this.fraudDetector.score(claim);
+    if (fraudScore > 0.8) {
+      await this.flagForReview(claim, fraudScore);
+      return { status: 'UNDER_REVIEW', fraudScore };
+    }
+
+    // Step 3: Process payment
+    const payment = this.calculatePayment(claim);
+    await this.saveToDataWarehouse(claim, payment);
+
+    return { status: 'APPROVED', paymentAmount: payment };
+  }
+
+  private calculatePayment(claim: Claim): number {
+    // Apply contract rates, deductibles, copays
+    const allowedAmount = claim.submittedAmount * claim.contractRate;
+    return Math.max(0, allowedAmount - claim.deductible - claim.copay);
+  }
+}`,
+      difficulty: "hard",
+      topic: "System Design",
+    },
+    {
+      id: "opt2",
+      question: "Find Duplicate Patients - Given a list of patient records, find potential duplicates using fuzzy matching",
+      answer: "Use blocking to reduce comparisons (same DOB/zip), then calculate similarity scores using Levenshtein distance or Soundex for names. Consider phonetic matching and address normalization.",
+      code: `function findDuplicatePatients(patients: Patient[]): PatientMatch[] {
+  const matches: PatientMatch[] = [];
+
+  // Block by date of birth to reduce comparisons
+  const blocked = groupBy(patients, 'dateOfBirth');
+
+  for (const [dob, candidates] of Object.entries(blocked)) {
+    for (let i = 0; i < candidates.length; i++) {
+      for (let j = i + 1; j < candidates.length; j++) {
+        const score = calculateSimilarity(candidates[i], candidates[j]);
+        if (score > 0.85) {
+          matches.push({
+            patient1: candidates[i],
+            patient2: candidates[j],
+            confidence: score
+          });
+        }
+      }
+    }
+  }
+
+  return matches.sort((a, b) => b.confidence - a.confidence);
+}
+
+function calculateSimilarity(p1: Patient, p2: Patient): number {
+  const nameSim = jaroWinkler(p1.name, p2.name);
+  const addressSim = jaroWinkler(normalizeAddress(p1.address), normalizeAddress(p2.address));
+  const phoneSim = p1.phone === p2.phone ? 1.0 : 0.0;
+
+  // Weighted average
+  return nameSim * 0.5 + addressSim * 0.3 + phoneSim * 0.2;
+}`,
+      difficulty: "medium",
+      topic: "Arrays & Strings",
+    },
+    {
+      id: "opt3",
+      question: "Explain HIPAA compliance considerations when designing a healthcare API",
+      answer: "Key requirements: Encryption at rest and in transit (TLS 1.2+), authentication (OAuth2/OIDC), audit logging for all PHI access, access controls (RBAC), data minimization, breach notification procedures, business associate agreements, and regular security assessments.",
+      code: `// Example HIPAA-compliant API design
+interface HIPAACompliantAPI {
+  // All endpoints require authentication
+  @RequireAuth
+  @AuditLog(action = "READ_PATIENT")
+  getPatient(id: string, requester: User): Patient {
+    // Verify user has access to this patient's data
+    if (!canAccess(requester, id)) {
+      throw new UnauthorizedError();
+    }
+
+    // Log the access for audit trail
+    auditLogger.log({
+      userId: requester.id,
+      patientId: id,
+      action: "READ",
+      timestamp: new Date(),
+      ipAddress: requester.ip
+    });
+
+    // Return minimal necessary data
+    return maskSensitiveFields(getPatientFromDB(id));
+  }
+}`,
+      difficulty: "medium",
+      topic: "System Design",
+    },
+    {
+      id: "opt4",
+      question: "SQL Query: Find the top 5 providers with the highest claim denial rate in the last 6 months",
+      answer: "Join claims with providers, filter by date and status, group by provider, calculate denial rate as denied/total, order by rate descending and limit to 5.",
+      code: `SELECT
+  p.provider_id,
+  p.provider_name,
+  COUNT(*) as total_claims,
+  SUM(CASE WHEN c.status = 'DENIED' THEN 1 ELSE 0 END) as denied_claims,
+  ROUND(
+    SUM(CASE WHEN c.status = 'DENIED' THEN 1 ELSE 0 END) * 100.0 / COUNT(*),
+    2
+  ) as denial_rate_percent
+FROM providers p
+JOIN claims c ON p.provider_id = c.provider_id
+WHERE c.submitted_date >= DATEADD(month, -6, GETDATE())
+GROUP BY p.provider_id, p.provider_name
+HAVING COUNT(*) >= 10  -- Filter providers with at least 10 claims
+ORDER BY denial_rate_percent DESC
+LIMIT 5;`,
+      difficulty: "medium",
+      topic: "Database Design",
+    },
+    {
+      id: "opt5",
+      question: "Design an ETL pipeline for migrating legacy patient data to a modern data warehouse",
+      answer: "Components: Extract (CDC or batch from legacy), Transform (data quality checks, normalization, mapping), Load (incremental to warehouse). Handle schema evolution, data validation, error handling, idempotency, and rollback capability.",
+      code: `class PatientDataETL {
+  private extractor: DataExtractor;
+  private transformer: DataTransformer;
+  private loader: DataLoader;
+
+  async runPipeline(): Promise<ETLResult> {
+    const metrics = { extracted: 0, transformed: 0, loaded: 0, errors: 0 };
+
+    try {
+      // Extract from legacy system
+      const batchIterator = this.extractor.extractInBatches(1000);
+
+      for await (const batch of batchIterator) {
+        metrics.extracted += batch.length;
+
+        // Transform
+        const transformed = batch
+          .map(record => this.transformer.transform(record))
+          .filter(result => result.isValid);
+
+        metrics.transformed += transformed.length;
+        metrics.errors += batch.length - transformed.length;
+
+        // Load to warehouse
+        await this.loader.loadBatch(transformed);
+        metrics.loaded += transformed.length;
+      }
+
+      return { success: true, metrics };
+    } catch (error) {
+      await this.handlePipelineFailure(error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  private transform(record: LegacyPatient): TransformedPatient {
+    return {
+      patientId: this.mapPatientId(record.legacy_id),
+      name: this.standardizeName(record.name),
+      dateOfBirth: this.parseDate(record.dob),
+      // Data quality validation
+      isValid: this.validateRequiredFields(record)
+    };
+  }
+}`,
+      difficulty: "hard",
+      topic: "System Design",
+    },
+  ],
 };
 
 export function getRandomQuestions(companyId: string, count: number = 3): InterviewQuestion[] {
@@ -1221,3 +1418,106 @@ export const DIFFICULTY_COLORS = {
   medium: "#eab308",
   hard: "#ef4444",
 };
+
+// Solution submission types
+export interface InterviewSolution {
+  id: string;
+  questionId: string;
+  authorName: string;
+  experience: string;
+  code: string;
+  language?: string;
+  createdAt: number;
+  likes?: number;
+}
+
+const SOLUTIONS_COLLECTION = "interview_solutions";
+
+/**
+ * Submit a new solution for an interview question
+ */
+export async function submitSolution(
+  questionId: string,
+  authorName: string,
+  experience: string,
+  code: string,
+  language: string = "typescript"
+): Promise<InterviewSolution | null> {
+  if (!isFirebaseReady() || !db) {
+    console.warn("Firebase not initialized, cannot submit solution");
+    throw new Error("Firebase not initialized");
+  }
+
+  const solutionData = {
+    questionId,
+    authorName: authorName.trim() || "Anonymous",
+    experience: experience.trim() || "Not specified",
+    code: code.trim(),
+    language,
+    createdAt: Date.now(),
+    likes: 0,
+  };
+
+  const docRef = await addDoc(collection(db, SOLUTIONS_COLLECTION), solutionData);
+
+  return {
+    id: docRef.id,
+    ...solutionData,
+  };
+}
+
+/**
+ * Get all solutions for a specific question (no composite index needed)
+ */
+export async function getSolutions(questionId: string): Promise<InterviewSolution[]> {
+  if (!isFirebaseReady() || !db) {
+    console.warn("Firebase not initialized, returning empty solutions");
+    return [];
+  }
+
+  const q = query(
+    collection(db, SOLUTIONS_COLLECTION),
+    where("questionId", "==", questionId)
+  );
+
+  const snapshot = await getDocs(q);
+  const solutions = snapshot.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data(),
+  } as InterviewSolution));
+
+  // Sort client-side (avoids requiring a Firestore composite index)
+  return solutions.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/**
+ * Get all solutions across all questions (for community page)
+ */
+export async function getAllSolutions(): Promise<InterviewSolution[]> {
+  if (!isFirebaseReady() || !db) {
+    console.warn("Firebase not initialized, returning empty solutions");
+    return [];
+  }
+
+  const snapshot = await getDocs(collection(db, SOLUTIONS_COLLECTION));
+  const solutions = snapshot.docs.map(doc => ({
+    id: doc.id,
+    ...doc.data(),
+  } as InterviewSolution));
+
+  return solutions.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/**
+ * Get all questions as a flat array (for community page)
+ */
+export function getAllQuestions(): (InterviewQuestion & { companyId: string; companyName: string })[] {
+  const all: (InterviewQuestion & { companyId: string; companyName: string })[] = [];
+  for (const company of COMPANIES) {
+    const questions = INTERVIEW_QUESTIONS[company.id] || [];
+    for (const q of questions) {
+      all.push({ ...q, companyId: company.id, companyName: company.name });
+    }
+  }
+  return all;
+}

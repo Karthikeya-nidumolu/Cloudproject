@@ -14,8 +14,12 @@ import {
   getRandomQuestions,
   getCompanyById,
   DIFFICULTY_COLORS,
+  InterviewSolution,
+  getSolutions,
+  submitSolution,
 } from "@/lib/interviews";
 import { generateInterviewQuestions, GeneratedQuestion } from "@/lib/grok";
+import { isFirebaseReady, restoreFirebaseAuth } from "@/lib/firebase";
 
 const TOPICS = [
   "Arrays & Strings",
@@ -44,6 +48,17 @@ export default function InterviewPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
 
+  // Solutions states
+  const [solutions, setSolutions] = useState<Record<string, InterviewSolution[]>>({});
+  const [showSolutionModal, setShowSolutionModal] = useState<string | null>(null);
+  const [solutionForm, setSolutionForm] = useState({
+    authorName: "",
+    experience: "",
+    code: "",
+  });
+  const [submittingSolution, setSubmittingSolution] = useState(false);
+  const [solutionError, setSolutionError] = useState<string | null>(null);
+
   // Auth check
   useEffect(() => {
     const currentUser = getCurrentUser();
@@ -53,6 +68,8 @@ export default function InterviewPage() {
     }
     setUser(currentUser);
     setLoading(false);
+    // Restore Firebase SDK auth for Firestore security rules
+    restoreFirebaseAuth().catch(() => {});
   }, [router]);
 
   const handleCompanySelect = (companyId: string) => {
@@ -116,15 +133,124 @@ export default function InterviewPage() {
     return q.difficulty === filter;
   });
 
-  const refreshQuestions = () => {
-    if (selectedCompany) {
-      if (aiMode) {
-        generateAiQuestions();
-      } else {
-        const randomQuestions = getRandomQuestions(selectedCompany, 5);
-        setQuestions(randomQuestions);
-        setExpandedQuestions(new Set());
+  // Load solutions when a question is expanded (Firebase + localStorage fallback)
+  const loadSolutionsForQuestion = async (questionId: string) => {
+    const local = JSON.parse(localStorage.getItem(`solutions-${questionId}`) || "[]") as InterviewSolution[];
+
+    if (!isFirebaseReady()) {
+      // Use localStorage only
+      setSolutions(prev => ({ ...prev, [questionId]: local }));
+      return;
+    }
+
+    try {
+      const questionSolutions = await getSolutions(questionId);
+      // Merge Firebase solutions with local ones
+      const merged = [...questionSolutions, ...local].sort((a, b) => b.createdAt - a.createdAt);
+      setSolutions(prev => ({ ...prev, [questionId]: merged }));
+    } catch (error) {
+      console.error("Failed to load solutions, using localStorage:", error);
+      setSolutions(prev => ({ ...prev, [questionId]: local }));
+    }
+  };
+
+  // Enhanced toggle that also loads solutions
+  const toggleQuestionWithSolutions = (questionId: string) => {
+    const newExpanded = new Set(expandedQuestions);
+    if (newExpanded.has(questionId)) {
+      newExpanded.delete(questionId);
+    } else {
+      newExpanded.add(questionId);
+      // Load solutions when expanding
+      if (!solutions[questionId]) {
+        loadSolutionsForQuestion(questionId);
       }
+    }
+    setExpandedQuestions(newExpanded);
+  };
+
+  // Submit solution handler with localStorage fallback
+  const handleSubmitSolution = async (questionId: string) => {
+    if (!solutionForm.authorName.trim() || !solutionForm.code.trim()) {
+      setSolutionError("Please provide your name and solution code");
+      return;
+    }
+
+    setSubmittingSolution(true);
+    setSolutionError(null);
+
+    const localSolution: InterviewSolution = {
+      id: `local-${Date.now()}`,
+      questionId,
+      authorName: solutionForm.authorName.trim(),
+      experience: solutionForm.experience.trim() || "Not specified",
+      code: solutionForm.code.trim(),
+      createdAt: Date.now(),
+      likes: 0,
+    };
+
+    try {
+      // Try Firebase first
+      const newSolution = await submitSolution(
+        questionId,
+        solutionForm.authorName,
+        solutionForm.experience,
+        solutionForm.code
+      );
+      if (newSolution) {
+        setSolutions(prev => ({
+          ...prev,
+          [questionId]: [newSolution, ...(prev[questionId] || [])]
+        }));
+      }
+    } catch (error) {
+      // Fallback to localStorage when Firebase fails
+      console.warn("Firebase submission failed, using localStorage:", error);
+
+      // Load existing local solutions
+      const existing = JSON.parse(localStorage.getItem(`solutions-${questionId}`) || "[]");
+      const updated = [localSolution, ...existing];
+      localStorage.setItem(`solutions-${questionId}`, JSON.stringify(updated));
+
+      // Update UI with local solution
+      setSolutions(prev => ({
+        ...prev,
+        [questionId]: [localSolution, ...(prev[questionId] || [])]
+      }));
+    } finally {
+      setSolutionForm({ authorName: "", experience: "", code: "" });
+      setShowSolutionModal(null);
+      setSubmittingSolution(false);
+    }
+  };
+
+  const refreshQuestions = async () => {
+    if (!selectedCompany) return;
+
+    setAiLoading(true);
+    setAiError(null);
+
+    try {
+      const company = getCompanyById(selectedCompany)?.name || selectedCompany;
+      // Always generate fresh AI questions for truly new content
+      const generatedQuestions = await generateInterviewQuestions(
+        company,
+        selectedTopic,
+        selectedDifficulty,
+        5
+      );
+      setQuestions(generatedQuestions);
+      setExpandedQuestions(new Set());
+      // Show AI indicator
+      setAiMode(true);
+    } catch (error) {
+      console.error("Failed to generate questions:", error);
+      // Fallback to pre-loaded questions if AI fails
+      const randomQuestions = getRandomQuestions(selectedCompany, 5);
+      setQuestions(randomQuestions);
+      setAiMode(false);
+    } finally {
+      setAiLoading(false);
     }
   };
 
@@ -222,6 +348,12 @@ export default function InterviewPage() {
               className="text-left px-4 py-2 rounded-lg bg-white/10 text-white font-medium"
             >
               💼 Interview Prep
+            </button>
+            <button
+              onClick={() => router.push("/community")}
+              className="text-left px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition"
+            >
+              👥 Community
             </button>
           </nav>
 
@@ -329,14 +461,22 @@ export default function InterviewPage() {
                     </h3>
                   </div>
                 </div>
-                {!aiMode && (
-                  <button
-                    onClick={refreshQuestions}
-                    className="px-4 py-2 bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 rounded-lg transition"
-                  >
-                    🔄 Get New Questions
-                  </button>
-                )}
+                <button
+                  onClick={refreshQuestions}
+                  disabled={aiLoading}
+                  className="px-4 py-2 bg-gradient-to-r from-cyan-500/20 to-purple-500/20 hover:from-cyan-500/30 hover:to-purple-500/30 disabled:opacity-50 text-cyan-300 rounded-lg transition flex items-center gap-2"
+                >
+                  {aiLoading ? (
+                    <>
+                      <span className="animate-spin">⚡</span>
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      🤖 Get New Questions
+                    </>
+                  )}
+                </button>
               </div>
 
               {/* AI Mode Controls */}
@@ -454,7 +594,7 @@ export default function InterviewPage() {
                   >
                     {/* Question Header */}
                     <button
-                      onClick={() => toggleQuestion(question.id)}
+                      onClick={() => toggleQuestionWithSolutions(question.id)}
                       className="w-full p-5 text-left flex items-start justify-between"
                     >
                       <div className="flex-1 pr-4">
@@ -493,7 +633,7 @@ export default function InterviewPage() {
                           </div>
 
                           {question.code && (
-                            <div>
+                            <div className="mb-6">
                               <h5 className="text-sm font-semibold text-cyan-400 mb-2">Code:</h5>
                               <div className="bg-black/70 rounded-lg p-4 overflow-x-auto border border-white/5">
                                 <pre className="code-block text-sm text-gray-300">
@@ -502,6 +642,62 @@ export default function InterviewPage() {
                               </div>
                             </div>
                           )}
+
+                          {/* Community Solutions Section */}
+                          <div className="border-t border-white/10 pt-4 mt-4">
+                            <div className="flex items-center justify-between mb-4">
+                              <h5 className="text-sm font-semibold text-green-400 flex items-center gap-2">
+                                👥 Community Solutions
+                                {solutions[question.id] && (
+                                  <span className="text-xs bg-green-500/20 text-green-300 px-2 py-0.5 rounded-full">
+                                    {solutions[question.id].length}
+                                  </span>
+                                )}
+                              </h5>
+                              <button
+                                onClick={() => setShowSolutionModal(question.id)}
+                                className="text-xs px-3 py-1.5 bg-gradient-to-r from-green-500/20 to-cyan-500/20 hover:from-green-500/30 hover:to-cyan-500/30 text-green-300 rounded-lg transition flex items-center gap-1"
+                              >
+                                ➕ Submit Solution
+                              </button>
+                            </div>
+
+                            {/* Solutions List */}
+                            {solutions[question.id]?.length > 0 ? (
+                              <div className="space-y-3">
+                                {solutions[question.id].map((solution) => (
+                                  <div
+                                    key={solution.id}
+                                    className="bg-black/30 border border-white/5 rounded-lg p-4"
+                                  >
+                                    <div className="flex items-center justify-between mb-2">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-sm font-medium text-cyan-300">
+                                          {solution.authorName}
+                                        </span>
+                                        <span className="text-xs text-gray-500">•</span>
+                                        <span className="text-xs text-gray-400">
+                                          {solution.experience}
+                                        </span>
+                                      </div>
+                                      <span className="text-xs text-gray-500">
+                                        {new Date(solution.createdAt).toLocaleDateString()}
+                                      </span>
+                                    </div>
+                                    <div className="bg-black/50 rounded-lg p-3 overflow-x-auto">
+                                      <pre className="code-block text-xs text-gray-300">
+                                        <code>{solution.code}</code>
+                                      </pre>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-sm text-gray-500 italic">
+                                No community solutions yet. Be the first to share your approach!
+                              </p>
+                            )}
+                          </div>
                         </div>
                       </div>
                     )}
@@ -527,6 +723,98 @@ export default function InterviewPage() {
           )}
         </div>
       </div>
+
+      {/* Solution Submission Modal */}
+      {showSolutionModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm fade-in">
+          <div className="bg-black/90 border border-white/20 rounded-2xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-xl font-bold text-green-400">Submit Your Solution</h3>
+              <button
+                onClick={() => {
+                  setShowSolutionModal(null);
+                  setSolutionError(null);
+                }}
+                className="text-gray-400 hover:text-white text-2xl"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-gray-400 mb-2 block">Your Name *</label>
+                <input
+                  type="text"
+                  value={solutionForm.authorName}
+                  onChange={(e) => setSolutionForm(prev => ({ ...prev, authorName: e.target.value }))}
+                  placeholder="e.g., John Doe"
+                  className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-2 text-white outline-none focus:border-green-500 transition"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm text-gray-400 mb-2 block">Experience Level</label>
+                <select
+                  value={solutionForm.experience}
+                  onChange={(e) => setSolutionForm(prev => ({ ...prev, experience: e.target.value }))}
+                  className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-2 text-white outline-none focus:border-green-500 transition"
+                >
+                  <option value="">Select experience</option>
+                  <option value="Student">Student</option>
+                  <option value="Junior (0-2 years)">Junior (0-2 years)</option>
+                  <option value="Mid-level (3-5 years)">Mid-level (3-5 years)</option>
+                  <option value="Senior (5-10 years)">Senior (5-10 years)</option>
+                  <option value="Staff/Principal (10+ years)">Staff/Principal (10+ years)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-sm text-gray-400 mb-2 block">Your Solution Code *</label>
+                <textarea
+                  value={solutionForm.code}
+                  onChange={(e) => setSolutionForm(prev => ({ ...prev, code: e.target.value }))}
+                  placeholder="Paste your code here..."
+                  rows={10}
+                  className="w-full bg-black/50 border border-white/10 rounded-lg px-4 py-2 text-white outline-none focus:border-green-500 transition font-mono text-sm"
+                />
+              </div>
+
+              {solutionError && (
+                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 text-red-300 text-sm">
+                  {solutionError}
+                </div>
+              )}
+
+              <div className="flex gap-3 pt-4">
+                <button
+                  onClick={() => {
+                    setShowSolutionModal(null);
+                    setSolutionError(null);
+                  }}
+                  className="flex-1 px-4 py-2 border border-white/20 rounded-lg text-gray-300 hover:bg-white/5 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleSubmitSolution(showSolutionModal)}
+                  disabled={submittingSolution}
+                  className="flex-1 px-4 py-2 bg-gradient-to-r from-green-500 to-cyan-500 hover:from-green-600 hover:to-cyan-600 disabled:opacity-50 text-white rounded-lg transition flex items-center justify-center gap-2"
+                >
+                  {submittingSolution ? (
+                    <>
+                      <span className="animate-spin">⚡</span>
+                      Submitting...
+                    </>
+                  ) : (
+                    "Submit Solution"
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
